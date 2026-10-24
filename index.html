@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AquaGuard Tirupati</title>
+  <link rel="preconnect" href="https://unpkg.com" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="AquaGuard home">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span>AquaGuard <strong>361</strong></span>
+    </a>
+    <nav class="main-nav" aria-label="Main navigation">
+      <button class="nav-link active" type="button">Map</button>
+      <button class="nav-link" type="button">Reports</button>
+      <button class="nav-link" type="button">Analytics</button>
+    </nav>
+    <div class="role-switcher" aria-label="Choose app role">
+      <button class="role-button active" data-role="admin" type="button">Admin</button>
+      <button class="role-button" data-role="user" type="button">User</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="sidebar">
+      <div class="sidebar-heading">
+        <div>
+          <p class="eyebrow">Water network</p>
+          <h1>Monitoring map</h1>
+        </div>
+        <button class="icon-button add-button" id="openReportButton" type="button" aria-label="Report a location">+</button>
+      </div>
+
+      <section class="usage-overview" id="usageOverview" aria-label="Your water usage">
+        <div><span>Today</span><strong>286 <small>L</small></strong></div>
+        <div><span>This month</span><strong>7,840 <small>L</small></strong></div>
+        <div><span>Compared to last month</span><strong class="usage-down">-8%</strong></div>
+      </section>
+
+      <div class="admin-control search-wrap">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" /></svg>
+        <input id="searchInput" type="search" placeholder="Search stations or areas" aria-label="Search stations or areas" />
+      </div>
+
+      <div class="admin-control filter-row" aria-label="Filter stations">
+        <button class="filter active" data-filter="all" type="button">All <span>8</span></button>
+        <button class="filter" data-filter="safe" type="button">Safe <span>5</span></button>
+        <button class="filter" data-filter="warning" type="button">Watch <span>2</span></button>
+        <button class="filter" data-filter="danger" type="button">Alert <span>1</span></button>
+      </div>
+
+      <div class="station-list" id="stationList"></div>
+    </aside>
+
+    <section class="map-panel" aria-label="Water station map">
+      <div id="map"></div>
+      <div class="map-toolbar">
+        <button class="map-action primary" id="reportButton" type="button">
+          <span aria-hidden="true">+</span> Report issue
+        </button>
+        <button class="map-action" id="locateButton" type="button" aria-label="Use my location">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0-5v3m0 12v3M3 12h3m12 0h3" /></svg>
+        </button>
+      </div>
+      <div class="legend" aria-label="Map legend">
+        <span><i class="dot safe"></i> Safe</span>
+        <span><i class="dot warning"></i> Watch</span>
+        <span><i class="dot danger"></i> Alert</span>
+        <span><i class="usage-outline"></i> High usage</span>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="reportDialog">
+    <form id="reportForm" method="dialog">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">New field report</p><h2>Report a water issue</h2></div>
+        <button class="icon-button" id="closeReportButton" value="cancel" type="button" aria-label="Close">×</button>
+      </div>
+      <label>Issue type
+        <select id="issueType" required>
+          <option value="Leak">Visible leak / leakage</option>
+          <option class="admin-only-option" value="Contamination">Possible contamination</option>
+          <option class="admin-only-option" value="Low pressure">Low water pressure</option>
+          <option class="admin-only-option" value="Discoloration">Water discoloration</option>
+        </select>
+      </label>
+      <div class="form-grid">
+        <label>Latitude<input id="latitude" type="number" step="any" value="13.6288" required /></label>
+        <label>Longitude<input id="longitude" type="number" step="any" value="79.4192" required /></label>
+      </div>
+      <label>Details<textarea id="details" rows="4" placeholder="Describe what you observed..." required></textarea></label>
+      <button class="submit-button" value="default" type="submit">Submit report</button>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polished"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

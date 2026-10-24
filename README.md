@@ -1,2 +1,11 @@
 # AquaGuard-361
-Repository for https://replit.com/@aditya99499/AquaGuard-360
+
+Interactive Tirupati water monitoring and community reporting map, including Mohan Babu University.
+
+## Run locally
+
+```bash
+python3 -m http.server 8080
+```
+
+Open `http://localhost:8080` in your browser. An internet connection is required to load OpenStreetMap tiles and the map library.
