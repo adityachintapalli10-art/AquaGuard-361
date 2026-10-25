@@ -21,7 +21,7 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     onboarding_complete: Mapped[bool] = mapped_column(default=False)
 
-    settings: Mapped[Optional["UserSetting"]] = relationship(back_populates="user")
+    settings: Mapped[Optional["UserSetting"]] = relationship(back_populates="user", uselist=False)
     sessions: Mapped[list["UserSession"]] = relationship(back_populates="user")
     readings: Mapped[list["SensorReading"]] = relationship(back_populates="user")
     alerts: Mapped[list["AlertRecord"]] = relationship(back_populates="user")

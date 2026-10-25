@@ -1,69 +1,74 @@
 from __future__ import annotations
 
-import secrets
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import datetime
+from typing import Literal, Optional
 
-import bcrypt
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.orm import Session
-
-from backend.database import get_db
-from backend.models import User, UserSession
-
-security = HTTPBearer(auto_error=False)
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
-def hash_password(password: str) -> str:
-    salt = bcrypt.gensalt(rounds=12)
-    return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
 
 
-def verify_password(password: str, password_hash: str) -> bool:
-    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
 
 
-def create_session_token(user: User, db: Session) -> str:
-    token = secrets.token_urlsafe(32)
-    session = UserSession(
-        user_id=user.id,
-        token=token,
-        created_at=datetime.now(timezone.utc),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
-    )
-    db.add(session)
-    db.commit()
-    return token
+class UserSettingUpdate(BaseModel):
+    building_name: str = "AquaGuard Demo"
+    building_type: str = "Household"
+    number_of_users: int = 8
+    number_of_tanks: int = 1
+    tank_capacity_l: float = 2500.0
+    pipe_diameter_mm: float = 50.0
+    daily_consumption_target_l: float = 1800.0
+    monitoring_mode: Literal["Demo", "Physical IoT", "Hybrid"] = "Demo"
+    location_name: str = "Demo Campus"
+    min_ph: float = 6.5
+    max_ph: float = 8.5
+    turbidity_max_ntu: float = 2.0
+    low_tank_threshold_pct: float = 20.0
+    high_flow_threshold_lpm: float = 70.0
+    leak_sensitivity: float = 15.0
+    temp_warning_high_c: float = 32.0
+    temp_warning_low_c: float = 5.0
+    email_notifications: bool = False
+    simulator_mode: str = "Normal Mode"
 
 
-def get_user_from_token(token: str, db: Session) -> Optional[User]:
-    session = db.query(UserSession).filter(UserSession.token == token).first()
-    if not session:
-        return None
-    if session.expires_at and session.expires_at < datetime.now(timezone.utc):
-        db.delete(session)
-        db.commit()
-        return None
-    return db.query(User).filter(User.id == session.user_id).first()
+class DeviceReading(BaseModel):
+    device_id: str = Field(..., min_length=2)
+    timestamp: datetime
+    flow_lpm: Optional[float] = None
+    inlet_flow_lpm: Optional[float] = None
+    outlet_flow_lpm: Optional[float] = None
+    ph: Optional[float] = None
+    turbidity_ntu: Optional[float] = None
+    temperature_c: Optional[float] = None
+    tank_level_pct: Optional[float] = None
+    source: str = "REAL SENSOR"
+
+    @field_validator("flow_lpm", "inlet_flow_lpm", "outlet_flow_lpm", "ph", "turbidity_ntu", "temperature_c", "tank_level_pct")
+    @classmethod
+    def validate_sensor_value(cls, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        if value == float("nan") or value == float("inf"):
+            raise ValueError("sensor values must be finite numbers")
+        return value
 
 
-async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db),
-) -> User:
-    if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    user = get_user_from_token(credentials.credentials, db)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session")
-    return user
+class AlertMessage(BaseModel):
+    alert_type: str
+    severity: str = "medium"
+    explanation: str
+    suggested_action: str = "Review the system and inspect the affected sensor."
 
 
-async def get_current_user_optional(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db: Session = Depends(get_db),
-) -> Optional[User]:
-    if credentials is None:
-        return None
-    return get_user_from_token(credentials.credentials, db)
+class UserRecord(BaseModel):
+    id: int
+    email: str
+    onboarding_complete: bool
+    model_config = ConfigDict(from_attributes=True)

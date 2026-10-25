@@ -30,6 +30,17 @@ def request_json(method: str, path: str, payload: dict | None = None) -> Any:
     return response.json()
 
 
+def source_tag(source: str | None) -> str:
+    mapping = {
+        "REAL SENSOR": "REAL SENSOR",
+        "SIMULATED": "SIMULATED",
+        "STALE": "STALE",
+        "SENSOR OFFLINE": "SENSOR OFFLINE",
+    }
+    value = (source or "SIMULATED").upper()
+    return mapping.get(value, value)
+
+
 def login_form() -> None:
     st.title("AquaGuard 360")
     st.subheader("Secure water monitoring and quality dashboard")
@@ -68,7 +79,7 @@ def register_form() -> None:
                 result = request_json("POST", "/api/auth/register", {"email": email, "password": password})
                 st.session_state.token = result["token"]
                 st.session_state.user = result["user"]
-                st.session_state.page = "setup"
+                st.session_state.page = "setup1"
                 st.rerun()
             except Exception as exc:
                 st.error(str(exc))
@@ -93,6 +104,11 @@ def load_session_data() -> None:
             st.session_state.alerts = request_json("GET", "/api/alerts")
         except Exception:
             st.session_state.alerts = []
+    if "consumption" not in st.session_state:
+        try:
+            st.session_state.consumption = request_json("GET", "/api/consumption/daily")
+        except Exception:
+            st.session_state.consumption = []
 
 
 def onboarding_step1() -> None:
@@ -108,8 +124,8 @@ def onboarding_step1() -> None:
         daily_consumption_target_l = st.number_input("Daily consumption target (L)", min_value=100.0, value=float(settings.get("daily_consumption_target_l", 1800.0)))
         monitoring_mode = st.selectbox("Monitoring mode", ["Demo", "Physical IoT", "Hybrid"], index=0)
         location_name = st.text_input("Optional location name", value=settings.get("location_name", "Demo Campus"))
-        next_pressed = st.form_submit_button("Continue to preferences")
-        if next_pressed:
+        next_step = st.form_submit_button("Continue to preferences")
+        if next_step:
             payload = {
                 "building_name": building_name,
                 "building_type": building_type,
@@ -175,32 +191,45 @@ def onboarding_step2() -> None:
                 st.error(str(exc))
 
 
-def dashboard() -> None:
+def _metric_card(title: str, value: str, suffix: str = "", helper: str = "") -> None:
+    st.markdown(
+        f"<div style='padding:1rem; border:1px solid #dfe7ed; border-radius:12px; background:#f5f9fb; margin-bottom:1rem;'>"
+        f"<div style='font-size:0.75rem; color:#4a6572;'>{title}</div>"
+        f"<div style='font-size:2rem; font-weight:700; color:#0a3142;'>{value}<span style='font-size:0.8rem; color:#4a6572;'>{suffix}</span></div>"
+        f"<div style='font-size:0.75rem; color:#5a7280;'>{helper}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_dashboard() -> None:
     load_session_data()
     settings = st.session_state.get("settings", {})
     latest = st.session_state.get("latest", {})
     alerts = st.session_state.get("alerts", [])
+
     st.title(f"Welcome, {settings.get('building_name', 'AquaGuard User')}")
     st.caption(f"Monitoring mode: {settings.get('monitoring_mode', 'Demo')} • Latest sensor timestamp: {latest.get('ph', {}).get('timestamp') or 'No data'}")
+
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Flow rate", f"{latest.get('flow', {}).get('value', 0) or 0:.1f} L/min")
+        _metric_card("Flow rate", f"{latest.get('flow', {}).get('value') if latest.get('flow', {}).get('value') is not None else 0:.1f}", " L/min", source_tag(latest.get('flow', {}).get('source')))
     with col2:
-        st.metric("Tank level", f"{latest.get('tank_level', {}).get('value', 0) or 0:.0f}%")
+        _metric_card("Tank level", f"{latest.get('tank_level', {}).get('value') if latest.get('tank_level', {}).get('value') is not None else 0:.0f}", "%", "Estimated volume")
     with col3:
-        st.metric("pH", f"{latest.get('ph', {}).get('value', 0) or 7.2:.2f}")
+        _metric_card("pH", f"{latest.get('ph', {}).get('value') if latest.get('ph', {}).get('value') is not None else 7.2:.2f}", "", "Configured range 6.5–8.5")
     with col4:
-        st.metric("Turbidity", f"{latest.get('turbidity', {}).get('value', 0) or 1.4:.2f} NTU")
+        _metric_card("Turbidity", f"{latest.get('turbidity', {}).get('value') if latest.get('turbidity', {}).get('value') is not None else 1.4:.2f}", " NTU", source_tag(latest.get('turbidity', {}).get('source')))
 
     history = request_json("GET", "/api/sensors/history?measurement_type=ph&limit=40")
     if history:
         df = pd.DataFrame(history)
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df["timestamp"], y=df["value"], mode="lines+markers", name="pH"))
-        fig.update_layout(title="Live pH Trend", xaxis_title="Timestamp", yaxis_title="pH")
+        fig.update_layout(title="Live pH trend", xaxis_title="Timestamp", yaxis_title="pH")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No pH history yet. Ingest simulator or device readings to populate the graph.")
+        st.info("No pH history yet. Generate simulator data or ingest sensor readings to populate the graph.")
 
     st.subheader("Alerts")
     if alerts:
@@ -210,9 +239,100 @@ def dashboard() -> None:
         st.success("No active alerts.")
 
 
+def render_live_sensors() -> None:
+    latest = request_json("GET", "/api/sensors/latest")
+    st.title("Live Sensors")
+    for metric_name, label in {"flow": "Flow Rate", "ph": "pH", "turbidity": "Turbidity", "temperature": "Temperature", "tank_level": "Tank Level"}.items():
+        value = latest.get(metric_name, {}).get("value")
+        source = latest.get(metric_name, {}).get("source", "SIMULATED")
+        quality = latest.get(metric_name, {}).get("quality_status", "UNKNOWN")
+        st.metric(label, value if value is not None else "N/A", delta=f"Source: {source_tag(source)} • {quality}")
+
+
+def render_water_quality() -> None:
+    st.title("Water Quality")
+    history = request_json("GET", "/api/sensors/history?measurement_type=ph&limit=40")
+    if history:
+        df = pd.DataFrame(history)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df["timestamp"], y=df["value"], mode="lines+markers", name="pH"))
+        fig.add_hline(y=6.5, line_dash="dash", line_color="red", annotation_text="Min reference")
+        fig.add_hline(y=8.5, line_dash="dash", line_color="orange", annotation_text="Max reference")
+        fig.update_layout(title="pH trend with configured thresholds", xaxis_title="Timestamp", yaxis_title="pH")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No pH history available yet.")
+
+    turbidity = request_json("GET", "/api/sensors/history?measurement_type=turbidity&limit=40")
+    if turbidity:
+        df_t = pd.DataFrame(turbidity)
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=df_t["timestamp"], y=df_t["value"], mode="lines+markers", name="Turbidity"))
+        fig2.update_layout(title="Turbidity trend", xaxis_title="Timestamp", yaxis_title="NTU")
+        st.plotly_chart(fig2, use_container_width=True)
+
+
+def render_consumption() -> None:
+    st.title("Consumption Analytics")
+    data = request_json("GET", "/api/consumption/daily")
+    if not data:
+        st.info("No consumption history available yet.")
+        return
+    df = pd.DataFrame(data)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["consumption_l"], mode="lines+markers", name="Consumption"))
+    fig.update_layout(title="Daily consumption", xaxis_title="Timestamp", yaxis_title="Litres")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(df.tail(10), use_container_width=True)
+
+
+def render_leak_detection() -> None:
+    st.title("Leak Detection")
+    alerts = request_json("GET", "/api/alerts")
+    if alerts:
+        leak_rows = [a for a in alerts if "leak" in a["alert_type"].lower() or "flow" in a["alert_type"].lower()]
+        if leak_rows:
+            st.table(leak_rows[:10])
+        else:
+            st.info("No leak or abnormal flow alerts detected yet.")
+    else:
+        st.info("No alerts available yet.")
+
+
+def render_alerts() -> None:
+    st.title("Alerts")
+    alerts = request_json("GET", "/api/alerts")
+    if not alerts:
+        st.info("No alerts recorded yet.")
+        return
+    for alert in alerts:
+        st.warning(f"[{alert['severity']}] {alert['alert_type']} — {alert['explanation']}")
+        st.caption(f"Suggested action: {alert['suggested_action']}")
+
+
+def render_reports() -> None:
+    st.title("Reports")
+    report_type = st.selectbox("Report type", ["sensor", "consumption", "alerts"])
+    if st.button("Download CSV"):
+        response = requests.get(f"{BACKEND_URL}/api/reports/csv?report_type={report_type}", headers=auth_headers(), timeout=20)
+        if response.status_code >= 400:
+            st.error(response.text)
+        else:
+            st.download_button("Download report", data=response.content, file_name=f"{report_type}-report.csv", mime="text/csv")
+
+
+def render_settings() -> None:
+    settings = request_json("GET", "/api/settings")
+    st.title("Settings")
+    st.json(settings)
+    if st.button("Refresh settings"):
+        st.rerun()
+
+
 def render_admin() -> None:
     st.title("Admin / Demo Controls")
-    st.write("Use this to switch simulator modes and generate test readings.")
     settings = request_json("GET", "/api/settings")
     mode = st.selectbox("Simulator mode", ["Normal Mode", "Leak Mode", "High Usage Mode", "Poor Water Quality Mode", "Low Tank Mode", "Sensor Failure Mode"], index=0)
     if st.button("Persist mode"):
@@ -220,9 +340,8 @@ def render_admin() -> None:
         payload["simulator_mode"] = mode
         updated = request_json("PUT", "/api/settings", payload)
         st.session_state.settings = updated
-        st.success(f"Saved simulator mode: {mode}")
-
-    if st.button("Send sample reading"):
+        st.success(f"Simulator mode saved: {mode}")
+    if st.button("Send sample sensor reading"):
         payload = {
             "device_id": "simulator-admin",
             "timestamp": "2025-01-01T00:00:00Z",
@@ -240,7 +359,7 @@ def render_admin() -> None:
             if response.status_code >= 400:
                 st.error(response.text)
             else:
-                st.success("Sample sensor data ingested successfully.")
+                st.success("Sample reading accepted.")
         except Exception as exc:
             st.error(str(exc))
 
@@ -255,44 +374,42 @@ if "token" not in st.session_state:
         login_form()
 else:
     try:
-        me = request_json("GET", "/api/auth/me")
-        st.session_state.user = me
-        settings = request_json("GET", "/api/settings")
-        st.session_state.settings = settings
-        if not settings.get("onboarding_complete"):
+        st.session_state.user = request_json("GET", "/api/auth/me")
+        st.session_state.settings = request_json("GET", "/api/settings")
+        if not st.session_state.settings.get("onboarding_complete"):
             if st.sidebar.button("Logout"):
-                st.session_state.clear()
-                st.rerun()
-            if st.sidebar.button("Continue onboarding"):
-                st.session_state.page = "setup1"
-            if st.session_state.get("page") == "setup2":
+                st.session_state.clear(); st.rerun()
+            if st.session_state.page == "setup2":
                 onboarding_step2()
             else:
                 onboarding_step1()
         else:
-            nav = st.sidebar.radio("Navigation", ["Dashboard", "Reports", "Admin / Demo Controls"])
+            nav = st.sidebar.radio("Navigation", ["Dashboard", "Live Sensors", "Water Quality", "Consumption Analytics", "Leak Detection", "Alerts", "Reports", "Settings", "Admin / Demo Controls"])
             if st.sidebar.button("Logout"):
                 try:
                     requests.post(f"{BACKEND_URL}/api/auth/logout", headers=auth_headers(), timeout=15)
                 except Exception:
                     pass
-                st.session_state.clear()
-                st.rerun()
+                st.session_state.clear(); st.rerun()
             if nav == "Dashboard":
-                dashboard()
+                render_dashboard()
+            elif nav == "Live Sensors":
+                render_live_sensors()
+            elif nav == "Water Quality":
+                render_water_quality()
+            elif nav == "Consumption Analytics":
+                render_consumption()
+            elif nav == "Leak Detection":
+                render_leak_detection()
+            elif nav == "Alerts":
+                render_alerts()
             elif nav == "Reports":
-                st.title("Reports")
-                report_type = st.selectbox("Report type", ["sensor", "consumption", "alerts"])
-                if st.button("Download CSV"):
-                    response = requests.get(f"{BACKEND_URL}/api/reports/csv?report_type={report_type}", headers=auth_headers(), timeout=20)
-                    if response.status_code >= 400:
-                        st.error(response.text)
-                    else:
-                        st.download_button("Download file", data=response.content, file_name=f"{report_type}-report.csv", mime="text/csv")
+                render_reports()
+            elif nav == "Settings":
+                render_settings()
             elif nav == "Admin / Demo Controls":
                 render_admin()
     except Exception as exc:
         st.error(f"Session expired or backend unavailable: {exc}")
         if st.button("Login again"):
-            st.session_state.clear()
-            st.rerun()
+            st.session_state.clear(); st.rerun()
