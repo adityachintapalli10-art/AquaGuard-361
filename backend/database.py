@@ -1,140 +1,146 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
-from sqlalchemy.orm import Session
-
-from backend.models import AlertRecord, UserSetting
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
-def _alert_payload(alert_type: str, severity: str, explanation: str, suggested_action: str, metadata: dict | None = None) -> dict:
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    onboarding_complete: Mapped[bool] = mapped_column(default=False)
+
+    settings: Mapped[Optional["UserSetting"]] = relationship(back_populates="user")
+    sessions: Mapped[list["UserSession"]] = relationship(back_populates="user")
+    readings: Mapped[list["SensorReading"]] = relationship(back_populates="user")
+    alerts: Mapped[list["AlertRecord"]] = relationship(back_populates="user")
+    consumption: Mapped[list["ConsumptionRecord"]] = relationship(back_populates="user")
+
+
+class UserSetting(Base):
+    __tablename__ = "user_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, nullable=False)
+    building_name: Mapped[str] = mapped_column(String(255), default="AquaGuard Demo")
+    building_type: Mapped[str] = mapped_column(String(50), default="Household")
+    number_of_users: Mapped[int] = mapped_column(Integer, default=8)
+    number_of_tanks: Mapped[int] = mapped_column(Integer, default=1)
+    tank_capacity_l: Mapped[float] = mapped_column(Float, default=2500.0)
+    pipe_diameter_mm: Mapped[float] = mapped_column(Float, default=50.0)
+    daily_consumption_target_l: Mapped[float] = mapped_column(Float, default=1800.0)
+    monitoring_mode: Mapped[str] = mapped_column(String(32), default="Demo")
+    location_name: Mapped[str] = mapped_column(String(255), default="Demo Campus")
+    min_ph: Mapped[float] = mapped_column(Float, default=6.5)
+    max_ph: Mapped[float] = mapped_column(Float, default=8.5)
+    turbidity_max_ntu: Mapped[float] = mapped_column(Float, default=2.0)
+    low_tank_threshold_pct: Mapped[float] = mapped_column(Float, default=20.0)
+    high_flow_threshold_lpm: Mapped[float] = mapped_column(Float, default=70.0)
+    leak_sensitivity: Mapped[float] = mapped_column(Float, default=15.0)
+    temp_warning_high_c: Mapped[float] = mapped_column(Float, default=32.0)
+    temp_warning_low_c: Mapped[float] = mapped_column(Float, default=5.0)
+    email_notifications: Mapped[bool] = mapped_column(default=False)
+    simulator_mode: Mapped[str] = mapped_column(String(32), default="Normal Mode")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    user: Mapped[User] = relationship(back_populates="settings")
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    token: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc) + timedelta(days=7))
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class SensorReading(Base):
+    __tablename__ = "sensor_readings"
+    __table_args__ = (UniqueConstraint("user_id", "sensor_id", "measurement_type", "timestamp", name="uq_sensor_value"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    sensor_id: Mapped[str] = mapped_column(String(64), default="sensor-1")
+    measurement_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), default="")
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="SIMULATED")
+    quality_status: Mapped[str] = mapped_column(String(32), default="OK")
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+
+    user: Mapped[User] = relationship(back_populates="readings")
+
+
+class AlertRecord(Base):
+    __tablename__ = "alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    alert_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), default="medium")
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    suggested_action: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), default="open")
+    acknowledged: Mapped[bool] = mapped_column(default=False)
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata: Mapped[str] = mapped_column(Text, default="{}")
+
+    user: Mapped[User] = relationship(back_populates="alerts")
+
+
+class ConsumptionRecord(Base):
+    __tablename__ = "consumption_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    consumption_l: Mapped[float] = mapped_column(Float, default=0.0)
+    period_label: Mapped[str] = mapped_column(String(32), default="day")
+
+    user: Mapped[User] = relationship(back_populates="consumption")
+
+
+def default_user_settings() -> dict:
     return {
-        "alert_type": alert_type,
-        "severity": severity,
-        "explanation": explanation,
-        "suggested_action": suggested_action,
-        "metadata": metadata or {},
+        "building_name": "AquaGuard Demo",
+        "building_type": "Household",
+        "number_of_users": 8,
+        "number_of_tanks": 1,
+        "tank_capacity_l": 2500.0,
+        "pipe_diameter_mm": 50.0,
+        "daily_consumption_target_l": 1800.0,
+        "monitoring_mode": "Demo",
+        "location_name": "Demo Campus",
+        "min_ph": 6.5,
+        "max_ph": 8.5,
+        "turbidity_max_ntu": 2.0,
+        "low_tank_threshold_pct": 20.0,
+        "high_flow_threshold_lpm": 70.0,
+        "leak_sensitivity": 15.0,
+        "temp_warning_high_c": 32.0,
+        "temp_warning_low_c": 5.0,
+        "email_notifications": False,
+        "simulator_mode": "Normal Mode",
     }
 
 
-def create_alert(db: Session, user_id: int, payload: dict[str, Any]) -> AlertRecord:
-    alert = AlertRecord(
-        user_id=user_id,
-        alert_type=payload["alert_type"],
-        severity=payload["severity"],
-        timestamp=datetime.now(timezone.utc),
-        explanation=payload["explanation"],
-        suggested_action=payload["suggested_action"],
-        status="open",
-        acknowledged=False,
-        metadata=json.dumps(payload.get("metadata", {})),
-    )
-    db.add(alert)
-    db.commit()
-    db.refresh(alert)
-    return alert
-
-
-def evaluate_alerts(db: Session, user_id: int, settings: UserSetting, readings: dict[str, Any]) -> list[AlertRecord]:
-    alerts: list[AlertRecord] = []
-    ph = readings.get("ph")
-    turbidity = readings.get("turbidity")
-    tank = readings.get("tank_level")
-    flow = readings.get("flow")
-    temperature = readings.get("temperature")
-    latest_timestamp = readings.get("timestamp")
-
-    if ph is not None:
-        if ph < settings.min_ph or ph > settings.max_ph:
-            alerts.append(
-                create_alert(
-                    db,
-                    user_id,
-                    _alert_payload(
-                        "ph_out_of_range",
-                        "high",
-                        f"pH reading {ph:.2f} is outside the configured reference range {settings.min_ph:.1f}-{settings.max_ph:.1f}.",
-                        "Check the probe calibration and collect a follow-up sample before drawing conclusions.",
-                        {"reading": ph, "threshold_min": settings.min_ph, "threshold_max": settings.max_ph, "timestamp": latest_timestamp.isoformat() if latest_timestamp else None},
-                    ),
-                )
-            )
-
-    if turbidity is not None and turbidity > settings.turbidity_max_ntu:
-        alerts.append(
-            create_alert(
-                db,
-                user_id,
-                _alert_payload(
-                    "high_turbidity",
-                    "high",
-                    f"Turbidity is {turbidity:.2f} NTU, above the configured threshold of {settings.turbidity_max_ntu:.2f} NTU.",
-                    "Perform a follow-up water-quality test and inspect the filtration or intake system.",
-                    {"reading": turbidity, "threshold": settings.turbidity_max_ntu, "timestamp": latest_timestamp.isoformat() if latest_timestamp else None},
-                ),
-            )
-        )
-
-    if tank is not None and tank < settings.low_tank_threshold_pct:
-        alerts.append(
-            create_alert(
-                db,
-                user_id,
-                _alert_payload(
-                    "low_tank_level",
-                    "medium",
-                    f"Tank level is {tank:.1f}% which is below the configured low-level threshold of {settings.low_tank_threshold_pct:.1f}%.",
-                    "Inspect the water source, review consumption patterns, and plan replenishment or supply review.",
-                    {"reading": tank, "threshold": settings.low_tank_threshold_pct, "timestamp": latest_timestamp.isoformat() if latest_timestamp else None},
-                ),
-            )
-        )
-
-    if flow is not None and flow > settings.high_flow_threshold_lpm:
-        alerts.append(
-            create_alert(
-                db,
-                user_id,
-                _alert_payload(
-                    "high_flow_detected",
-                    "medium",
-                    f"Flow rate is {flow:.1f} L/min, exceeding the configured threshold of {settings.high_flow_threshold_lpm:.1f} L/min.",
-                    "Review for running taps, process loads, or possible pipe leakage in the downstream line.",
-                    {"reading": flow, "threshold": settings.high_flow_threshold_lpm, "timestamp": latest_timestamp.isoformat() if latest_timestamp else None},
-                ),
-            )
-        )
-
-    if temperature is not None and temperature > settings.temp_warning_high_c:
-        alerts.append(
-            create_alert(
-                db,
-                user_id,
-                _alert_payload(
-                    "high_temperature",
-                    "medium",
-                    f"Temperature is {temperature:.1f}°C, above the configured warning threshold of {settings.temp_warning_high_c:.1f}°C.",
-                    "Check the sensor placement and inspect for heat buildup or flow-related temperature anomalies.",
-                    {"reading": temperature, "threshold": settings.temp_warning_high_c, "timestamp": latest_timestamp.isoformat() if latest_timestamp else None},
-                ),
-            )
-        )
-
-    if readings.get("sensor_failure"):
-        alerts.append(
-            create_alert(
-                db,
-                user_id,
-                _alert_payload(
-                    "sensor_failure",
-                    "high",
-                    "A sensor reading is missing, stale, or invalid, so the current condition may be incomplete.",
-                    "Inspect the instrument, verify power and network connectivity, and install a replacement or recalibration check.",
-                    {"failure": readings.get("sensor_failure"), "timestamp": latest_timestamp.isoformat() if latest_timestamp else None},
-                ),
-            )
-        )
-
-    return alerts
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)

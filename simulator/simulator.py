@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class SensorSample(BaseModel):
@@ -20,11 +20,9 @@ class SensorSample(BaseModel):
 
     @field_validator("flow_lpm", "inlet_flow_lpm", "outlet_flow_lpm", "ph", "turbidity_ntu", "temperature_c", "tank_level_pct")
     @classmethod
-    def validate_value(cls, value: Optional[float]) -> Optional[float]:
+    def validate_sensor_value(cls, value: Optional[float]) -> Optional[float]:
         if value is None:
             return None
         if value == float("nan") or value == float("inf"):
             raise ValueError("sensor values must be finite")
         return value
-
-    model_config = ConfigDict(extra="ignore")

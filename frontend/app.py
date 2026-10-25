@@ -1,111 +1,74 @@
 from __future__ import annotations
 
-import json
-import math
-import os
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import datetime
+from typing import Literal, Optional
 
-import requests
-
-BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
-DEVICE_API_KEY = os.getenv("DEVICE_API_KEY", "demo-device-key")
-
-MODES = {
-    "Normal Mode": "normal",
-    "Leak Mode": "leak",
-    "High Usage Mode": "high_usage",
-    "Poor Water Quality Mode": "poor_quality",
-    "Low Tank Mode": "low_tank",
-    "Sensor Failure Mode": "sensor_failure",
-}
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
 
 
-def _build_payload(mode: str, index: int) -> dict[str, Any]:
-    base = {
-        "device_id": "simulator-1",
-        "timestamp": (_now() - timedelta(minutes=index)).isoformat(),
-        "source": "SIMULATED",
-        "flow_lpm": 32.0,
-        "inlet_flow_lpm": 34.0,
-        "outlet_flow_lpm": 30.0,
-        "ph": 7.2,
-        "turbidity_ntu": 1.4,
-        "temperature_c": 24.5,
-        "tank_level_pct": 68.0,
-    }
-    if mode == "normal":
-        base["flow_lpm"] = 30 + math.sin(index / 6) * 8
-        base["inlet_flow_lpm"] = base["flow_lpm"] + 2
-        base["outlet_flow_lpm"] = base["flow_lpm"] - 1.5
-        base["ph"] = 7.2 + math.sin(index / 4) * 0.28
-        base["turbidity_ntu"] = 1.4 + math.sin(index / 5) * 0.5
-        base["temperature_c"] = 24.5 + math.cos(index / 7) * 1.6
-        base["tank_level_pct"] = max(25.0, 68.0 - (index * 0.1))
-    elif mode == "leak":
-        base["flow_lpm"] = 48.0 + math.sin(index / 3) * 10
-        base["inlet_flow_lpm"] = 52.0
-        base["outlet_flow_lpm"] = 38.0
-        base["ph"] = 7.1 + math.cos(index / 4) * 0.2
-        base["turbidity_ntu"] = 1.7
-        base["temperature_c"] = 25.1
-        base["tank_level_pct"] = max(18.0, 64.0 - index * 0.2)
-    elif mode == "high_usage":
-        base["flow_lpm"] = 72.0 + math.sin(index / 2) * 12
-        base["inlet_flow_lpm"] = 76.0
-        base["outlet_flow_lpm"] = 70.0
-        base["ph"] = 7.3
-        base["turbidity_ntu"] = 1.6
-        base["temperature_c"] = 26.0
-        base["tank_level_pct"] = max(15.0, 55.0 - index * 0.3)
-    elif mode == "poor_quality":
-        base["ph"] = 6.2 + math.sin(index / 6) * 0.6
-        base["turbidity_ntu"] = 4.2 + math.cos(index / 4) * 1.2
-        base["flow_lpm"] = 34.0
-        base["inlet_flow_lpm"] = 35.0
-        base["outlet_flow_lpm"] = 33.0
-        base["temperature_c"] = 24.9
-        base["tank_level_pct"] = 61.0
-    elif mode == "low_tank":
-        base["flow_lpm"] = 22.0 + math.sin(index / 4) * 4
-        base["inlet_flow_lpm"] = 24.0
-        base["outlet_flow_lpm"] = 21.0
-        base["ph"] = 7.0
-        base["turbidity_ntu"] = 1.3
-        base["temperature_c"] = 23.6
-        base["tank_level_pct"] = max(8.0, 48.0 - index * 0.7)
-    elif mode == "sensor_failure":
-        if index % 3 == 0:
-            base["ph"] = None
-            base["turbidity_ntu"] = None
-            base["flow_lpm"] = None
-        else:
-            base["ph"] = 7.5
-            base["turbidity_ntu"] = 2.1
-            base["flow_lpm"] = 28.0
-        base["tank_level_pct"] = 52.0
-        base["temperature_c"] = 25.1
-        base["inlet_flow_lpm"] = 29.0
-        base["outlet_flow_lpm"] = 29.0
-    return {k: v for k, v in base.items() if v is not None}
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
 
 
-def run_once(mode: str = "Normal Mode") -> dict[str, Any]:
-    payload = _build_payload(mode, 1)
-    response = requests.post(
-        f"{BACKEND_URL}/api/sensors/data",
-        json=payload,
-        headers={"X-Device-Key": DEVICE_API_KEY},
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.json()
+class UserSettingUpdate(BaseModel):
+    building_name: str = "AquaGuard Demo"
+    building_type: str = "Household"
+    number_of_users: int = 8
+    number_of_tanks: int = 1
+    tank_capacity_l: float = 2500.0
+    pipe_diameter_mm: float = 50.0
+    daily_consumption_target_l: float = 1800.0
+    monitoring_mode: Literal["Demo", "Physical IoT", "Hybrid"] = "Demo"
+    location_name: str = "Demo Campus"
+    min_ph: float = 6.5
+    max_ph: float = 8.5
+    turbidity_max_ntu: float = 2.0
+    low_tank_threshold_pct: float = 20.0
+    high_flow_threshold_lpm: float = 70.0
+    leak_sensitivity: float = 15.0
+    temp_warning_high_c: float = 32.0
+    temp_warning_low_c: float = 5.0
+    email_notifications: bool = False
+    simulator_mode: str = "Normal Mode"
 
 
-if __name__ == "__main__":
-    selected = os.getenv("SIMULATOR_MODE", "Normal Mode")
-    print(run_once(selected))
+class DeviceReading(BaseModel):
+    device_id: str = Field(..., min_length=2)
+    timestamp: datetime
+    flow_lpm: Optional[float] = None
+    inlet_flow_lpm: Optional[float] = None
+    outlet_flow_lpm: Optional[float] = None
+    ph: Optional[float] = None
+    turbidity_ntu: Optional[float] = None
+    temperature_c: Optional[float] = None
+    tank_level_pct: Optional[float] = None
+    source: str = "REAL SENSOR"
+
+    @field_validator("flow_lpm", "inlet_flow_lpm", "outlet_flow_lpm", "ph", "turbidity_ntu", "temperature_c", "tank_level_pct")
+    @classmethod
+    def validate_sensor_value(cls, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        if value == float("nan") or value == float("inf"):
+            raise ValueError("sensor values must be finite numbers")
+        return value
+
+
+class AlertMessage(BaseModel):
+    alert_type: str
+    severity: str = "medium"
+    explanation: str
+    suggested_action: str = "Review the system and inspect the affected sensor."
+
+
+class UserRecord(BaseModel):
+    id: int
+    email: str
+    onboarding_complete: bool
+    model_config = ConfigDict(from_attributes=True)

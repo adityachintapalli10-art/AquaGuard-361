@@ -1,44 +1,139 @@
 from __future__ import annotations
 
-import os
-from datetime import datetime, timedelta, timezone
-from typing import Generator, Optional
+import json
+from datetime import datetime, timezone
+from typing import Any
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-from backend.models import Base
-
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./aquaguard.db")
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+from backend.models import AlertRecord, UserSetting
 
 
-def create_db_and_tables() -> None:
-    Base.metadata.create_all(bind=engine)
+def _alert_payload(alert_type: str, severity: str, explanation: str, suggested_action: str, metadata: dict | None = None) -> dict:
+    return {
+        "alert_type": alert_type,
+        "severity": severity,
+        "explanation": explanation,
+        "suggested_action": suggested_action,
+        "metadata": metadata or {},
+    }
 
 
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+def create_alert(db: Session, user_id: int, payload: dict[str, Any]) -> AlertRecord:
+    alert = AlertRecord(
+        user_id=user_id,
+        alert_type=payload["alert_type"],
+        severity=payload["severity"],
+        timestamp=datetime.now(timezone.utc),
+        explanation=payload["explanation"],
+        suggested_action=payload["suggested_action"],
+        status="open",
+        acknowledged=False,
+        metadata=json.dumps(payload.get("metadata", {})),
+    )
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return alert
 
 
-def get_default_token() -> str:
-    return os.getenv("DEMO_TOKEN", "demo-token")
+def evaluate_alerts(db: Session, user_id: int, settings: UserSetting, readings: dict[str, Any]) -> list[AlertRecord]:
+    alerts: list[AlertRecord] = []
+    ph = readings.get("ph")
+    turbidity = readings.get("turbidity")
+    tank = readings.get("tank_level")
+    flow = readings.get("flow")
+    temperature = readings.get("temperature")
+    latest_timestamp = readings.get("timestamp")
 
+    if ph is not None and (ph < settings.min_ph or ph > settings.max_ph):
+        alerts.append(
+            create_alert(
+                db,
+                user_id,
+                _alert_payload(
+                    "ph_out_of_range",
+                    "high",
+                    f"pH reading {ph:.2f} is outside the configured reference range {settings.min_ph:.1f}-{settings.max_ph:.1f}.",
+                    "Check the probe calibration and collect a follow-up sample before drawing conclusions.",
+                    {"reading": ph, "threshold_min": settings.min_ph, "threshold_max": settings.max_ph, "timestamp": latest_timestamp.isoformat() if hasattr(latest_timestamp, "isoformat") else latest_timestamp},
+                ),
+            )
+        )
 
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    if turbidity is not None and turbidity > settings.turbidity_max_ntu:
+        alerts.append(
+            create_alert(
+                db,
+                user_id,
+                _alert_payload(
+                    "high_turbidity",
+                    "high",
+                    f"Turbidity is {turbidity:.2f} NTU, above the configured threshold of {settings.turbidity_max_ntu:.2f} NTU.",
+                    "Perform a follow-up water-quality test and inspect the filtration or intake system.",
+                    {"reading": turbidity, "threshold": settings.turbidity_max_ntu, "timestamp": latest_timestamp.isoformat() if hasattr(latest_timestamp, "isoformat") else latest_timestamp},
+                ),
+            )
+        )
 
+    if tank is not None and tank < settings.low_tank_threshold_pct:
+        alerts.append(
+            create_alert(
+                db,
+                user_id,
+                _alert_payload(
+                    "low_tank_level",
+                    "medium",
+                    f"Tank level is {tank:.1f}% which is below the configured low-level threshold of {settings.low_tank_threshold_pct:.1f}%.",
+                    "Inspect the water source, review consumption patterns, and plan replenishment or supply review.",
+                    {"reading": tank, "threshold": settings.low_tank_threshold_pct, "timestamp": latest_timestamp.isoformat() if hasattr(latest_timestamp, "isoformat") else latest_timestamp},
+                ),
+            )
+        )
 
-def user_session_expired(created_at: datetime, expires_at: Optional[datetime]) -> bool:
-    if expires_at is None:
-        return False
-    return datetime.now(timezone.utc) > expires_at
+    if flow is not None and flow > settings.high_flow_threshold_lpm:
+        alerts.append(
+            create_alert(
+                db,
+                user_id,
+                _alert_payload(
+                    "high_flow_detected",
+                    "medium",
+                    f"Flow rate is {flow:.1f} L/min, exceeding the configured threshold of {settings.high_flow_threshold_lpm:.1f} L/min.",
+                    "Review for running taps, process loads, or possible pipe leakage in the downstream line.",
+                    {"reading": flow, "threshold": settings.high_flow_threshold_lpm, "timestamp": latest_timestamp.isoformat() if hasattr(latest_timestamp, "isoformat") else latest_timestamp},
+                ),
+            )
+        )
 
+    if temperature is not None and temperature > settings.temp_warning_high_c:
+        alerts.append(
+            create_alert(
+                db,
+                user_id,
+                _alert_payload(
+                    "high_temperature",
+                    "medium",
+                    f"Temperature is {temperature:.1f}°C, above the configured warning threshold of {settings.temp_warning_high_c:.1f}°C.",
+                    "Check the sensor placement and inspect for heat buildup or flow-related temperature anomalies.",
+                    {"reading": temperature, "threshold": settings.temp_warning_high_c, "timestamp": latest_timestamp.isoformat() if hasattr(latest_timestamp, "isoformat") else latest_timestamp},
+                ),
+            )
+        )
 
-with engine.connect() as connection:
-    connection.execute(text("SELECT 1"))
+    if readings.get("sensor_failure"):
+        alerts.append(
+            create_alert(
+                db,
+                user_id,
+                _alert_payload(
+                    "sensor_failure",
+                    "high",
+                    "A sensor reading is missing, stale, or invalid, so the current condition may be incomplete.",
+                    "Inspect the instrument, verify power and network connectivity, and replace or recalibrate the sensor.",
+                    {"failure": readings.get("sensor_failure"), "timestamp": latest_timestamp.isoformat() if hasattr(latest_timestamp, "isoformat") else latest_timestamp},
+                ),
+            )
+        )
+
+    return alerts
