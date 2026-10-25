@@ -1,0 +1,5 @@
+DATABASE_URL=sqlite:///./aquaguard.db
+DEVICE_API_KEY=demo-device-key
+DEMO_PASSWORD=demo123
+BACKEND_URL=http://127.0.0.1:8000
+SIMULATOR_MODE=Normal Mode
